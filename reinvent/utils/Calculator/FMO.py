@@ -63,12 +63,94 @@ def run_multiwfn(multiwfn_path):
                     return centroid_distance, overlap_norm, overlap_square
     except Exception as e:
         print(f"Error during Multiwfn execution: {e}")
+
 def homo_lumo_mwfn(
         smiles: str,
         path_to_xtb: str,
         path_to_multiwfn: str,
         dirname: str,
-        additional_geometry_opt: bool = True, # if set to true, optimization engine is gfnff, Also implicit solvation is considered with alpb acetonitrile
+        additional_geometry_opt: bool = True, #if set to true, optimization engine is gfnff.
+        use_gfn2 = False,
+        triplet = False,
+        maximum_waiting_time: int = 180,
+        delete_existing: bool = False,
+        ):
+    '''
+    Runs xtb and Multiwfn from commandline. Important: As the dirname will be removed, make sure this is not an important directory by mistake!
+
+    :param smiles:
+    :param dirname:
+    :param path_to_xtb:
+    :param path_to_multiwfn:
+    :return:
+    '''
+
+    mol = Chem.MolFromSmiles(smiles)
+    charge = Chem.GetFormalCharge(mol)
+
+    if os.path.isdir(dirname) and delete_existing == False:
+        print(f"Warning: {dirname} exists already. Please set remove to true to delete it or choose another name for the directory.")
+        print('Something')
+        return None, None
+    if os.path.isdir(dirname) and delete_existing == True:
+        print(f"Warning: Deleting existing directory {dirname}, as flag delete_existing is set to True. If you don't want this, you have 10 seconds to abort the process.")
+        time.sleep(10)
+        shutil.rmtree(dirname)
+
+    os.mkdir(dirname)
+    os.chdir(dirname)
+
+    if triplet:
+        multiplicity = 2 #corresponds to unpaired electrons
+    else:
+        multiplicity = 0 #corresponds to unpaired electrons
+
+    if use_gfn2:
+        xtb_method = '--gfn 2'
+    else:
+        xtb_method = '--gfnff'
+
+    try:
+        atoms, coordinates = StructureGenerator().get_structure(smiles, write_xyz=True)
+        if additional_geometry_opt:
+            geometry_optimized = False
+            start_time = tm()
+            os.system(f"{path_to_xtb} input.xyz --opt {xtb_method} --chrg {charge} --uhf {multiplicity} --verbose> xtb_output.log")
+
+            while geometry_optimized == False and tm()-start_time < maximum_waiting_time:
+                files = os.listdir(dirname)
+                if 'xtbopt.xyz' in files:
+                    geometry_optimized = True
+                if tm()-start_time > maximum_waiting_time:
+                    os.chdir('..')
+                    shutil.rmtree(dirname)
+                    print(f"Geometry optimization took longer than {maximum_waiting_time} seconds. Aborting.")
+                    return None, None
+
+            os.system(f"{path_to_xtb} xtbopt.xyz --molden --chrg {charge} --uhf {multiplicity} --verbose > xtb_output.log")
+        else:
+            os.system(f"{path_to_xtb} input.xyz --molden --chrg {charge} --uhf {multiplicity} --verbose > xtb_output.log")
+        homo_idx, lumo_idx = extract_homo_lumo_indices()
+        generate_multiwfn_input(homo_idx, lumo_idx)
+        #path_to_multiwfn = '/home/employee/l_schl60/software/Multiwfn_3.7_bin_Linux_noGUI/Multiwfn' #Only for catalyst testing!!!!
+        dist, hl_norm, hl_square = run_multiwfn(path_to_multiwfn)
+        os.chdir('..')
+        shutil.rmtree(dirname)
+
+        return hl_norm, dist
+    except:
+        print(f'error for {smiles}')
+        os.chdir('..')
+        shutil.rmtree(dirname)
+        return None, None
+
+
+def homo_lumo_mwfn_quick(
+        smiles: str,
+        path_to_xtb: str,
+        path_to_multiwfn: str,
+        dirname: str,
+        additional_geometry_opt: bool = True, # if set to true, optimization engine is gfnff
         use_gfn2=False,
         maximum_waiting_time: int = 180,
         delete_existing: bool = False
@@ -147,3 +229,8 @@ def homo_lumo_mwfn(
         os.chdir('..')
         shutil.rmtree(dirname)
         return hl_norm_s1, dist_s1, hl_norm_t1, dist_t1
+    except:
+        print(f'error for {smiles}')
+        os.chdir('..')
+        shutil.rmtree(dirname)
+        return None, None, None, None
